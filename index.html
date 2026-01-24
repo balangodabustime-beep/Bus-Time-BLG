@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Balangoda Bus — Prototype</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+e2Y7wXkqk6bqTjrk0uXw6qk2yF1kCk9f2qzC/4oM=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j8s+6V3Q4P6N1lN0r2m2d2GkIYbM8u4c6H1qjUs=" crossorigin=""></script>
+
+  <!-- togeojson for GPX -> GeoJSON -->
+  <script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@0.16.0/dist/togeojson.min.js"></script>
+
+  <!-- Turf for geospatial calculations -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#ffffff;
+      --fg:#1b1b1b;
+      --card:#f7f7f7;
+      --accent:#0b74de;
+      --muted:#666;
+    }
+    [data-theme="dark"]{
+      --bg:#0f1720;
+      --fg:#e6eef8;
+      --card:#0b1220;
+      --accent:#3aa0ff;
+      --muted:#9fb4d6;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    .app{
+      display:flex;
+      flex-direction:column;
+      min-height:100vh;
+    }
+    header{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      padding:12px;
+      border-bottom:1px solid rgba(0,0,0,0.06);
+      background:linear-gradient(90deg, rgba(255,255,255,0.03), transparent);
+    }
+    .brand{font-weight:700;font-size:18px;}
+    .hamburger{margin-left:8px;padding:6px;border-radius:6px;background:transparent;border:1px solid rgba(0,0,0,0.06);cursor:pointer;}
+    main{display:flex;gap:16px;padding:16px;flex:1;}
+    .panel{flex:0 0 380px;background:var(--card);padding:12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.06);}
+    .mapwrap{flex:1;min-height:600px;border-radius:10px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,0.06);}
+    #map{width:100%;height:100%;}
+    label{display:block;font-size:12px;color:var(--muted);margin-top:10px;}
+    select,input[type="time"]{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(0,0,0,0.08);background:transparent;color:var(--fg);}
+    .row{display:flex;gap:8px;}
+    .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;background:var(--accent);color:white;border:none;cursor:pointer;}
+    .icon-btn{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px;border-radius:8px;cursor:pointer;}
+    .small{font-size:13px;}
+    .result{margin-top:12px;padding:10px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);color:var(--fg)}
+    .menu{
+      position:fixed;left:-320px;top:0;height:100%;width:320px;background:var(--card);box-shadow:6px 0 24px rgba(0,0,0,0.12);padding:16px;transition:left .2s;
+      z-index:9999;
+    }
+    .menu.open{left:0;}
+    .menu h3{margin:0 0 6px 0;}
+    .toggle{display:flex;align-items:center;gap:8px;margin-top:10px;}
+    .language-select{display:flex;gap:8px;margin-top:10px;}
+    .map-modal{
+      position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:9998;
+    }
+    .map-modal.open{display:flex;}
+    .map-dialog{width:95%;height:85%;background:var(--card);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;}
+    .map-toolbar{display:flex;align-items:center;justify-content:space-between;padding:8px;border-bottom:1px solid rgba(0,0,0,0.06);}
+    .gpx-list{max-height:120px;overflow:auto;padding:6px;border-radius:6px;background:rgba(0,0,0,0.02);}
+    .help{font-size:12px;color:var(--muted);margin-top:8px}
+    footer{padding:12px;text-align:center;font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="app" id="app" data-theme="light">
+    <header>
+      <button class="hamburger" id="hamburger">☰</button>
+      <div class="brand">Balangoda Transit (prototype)</div>
+      <div style="margin-left:auto;font-size:13px;color:var(--muted)">
+        <span id="clock">--:--:--</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" aria-label="controls">
+        <div>
+          <label id="lbl-route">Route</label>
+          <select id="route-select"></select>
+
+          <label id="lbl-from">From</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="from-select" style="flex:1"></select>
+            <!-- map icon to open map modal -->
+            <button id="open-map" title="Open map" class="icon-btn" aria-label="Open map">🗺️</button>
+          </div>
+
+          <label id="lbl-to">To</label>
+          <select id="to-select"></select>
+
+          <label id="lbl-time">Time (use current or choose)</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="time-input" type="time" step="1" />
+            <button id="clear-time" class="icon-btn" title="Use live clock">⟳</button>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button id="find-btn" class="btn small">Find Bus</button>
+            <button id="load-gpx" class="icon-btn small">Load GPX</button>
+            <input id="gpx-file" type="file" accept=".gpx" style="display:none" multiple/>
+          </div>
+
+          <div class="result" id="results">
+            <div id="summary">Select route, from & to, then Find Bus.</div>
+          </div>
+
+          <div class="help" id="help">Tip: Open the map to select 'from' and 'to' positions directly on a GPX track. GPX files you upload will be saved locally to this browser (LocalStorage) for permanence in this WebView app.</div>
+        </div>
+      </section>
+
+      <section class="mapwrap">
+        <div id="map"></div>
+      </section>
+    </main>
+
+    <footer>
+      Prototype — distances are computed along GPX tracks (nearest point projection). Speed used: <span id="speed-display">23</span> km/h. Waiting at stops: 30s.
+    </footer>
+  </div>
+
+  <!-- Side menu -->
+  <aside class="menu" id="menu">
+    <h3 id="menu-title">Settings</h3>
+
+    <div class="toggle">
+      <label for="theme-toggle" id="lbl-theme">Theme</label>
+      <input type="checkbox" id="theme-toggle"/>
+      <span id="theme-state" class="small" style="margin-left:auto">Light</span>
+    </div>
+
+    <div style="margin-top:12px">
+      <label id="lbl-language">Language</label>
+      <div class="language-select" role="tablist">
+        <button class="icon-btn lang-btn" data-lang="en">English</button>
+        <button class="icon-btn lang-btn" data-lang="si">සිංහල</button>
+        <button class="icon-btn lang-btn" data-lang="ta">தமிழ்</button>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <h4 id="gpx-title">GPX Tracks (saved)</h4>
+      <div class="gpx-list" id="gpx-list">No GPX loaded.</div>
+      <div class="help">Uploaded GPX files are persisted locally in this WebView. To update a file, upload another with the same filename.</div>
+    </div>
+  </aside>
+
+  <!-- Map modal -->
+  <div class="map-modal" id="map-modal">
+    <div class="map-dialog" role="dialog" aria-modal="true" aria-label="Map">
+      <div class="map-toolbar">
+        <div>
+          <button id="close-map" class="icon-btn">Close</button>
+          <button id="place-from" class="icon-btn">Set From</button>
+          <button id="place-to" class="icon-btn">Set To</button>
+        </div>
+        <div>
+          <span id="modal-hint" class="small">Click on a track to place nearest point</span>
+        </div>
+      </div>
+      <div id="modal-map" style="flex:1"></div>
+    </div>
+  </div>
+
+  <script>
+    /***************************************************************************
+     * DATA - converted and cleaned up from the user's dataset.
+     * - routes: busStops + timetable simplified.
+     * - Each route has stops[] with names and distances (km from origin).
+     * - timetable: arrays of departure times (24h strings) for each direction
+     *
+     * NOTE: The GPX tracks are not provided by the user, so the UI allows
+     * uploading GPX files and saving them locally. The code will persist these
+     * files into localStorage so they remain available inside the app/webview.
+     ***************************************************************************/
+
+    const SETTINGS_KEY = 'balangoda_transit_settings_v1';
+    const GPX_STORE_KEY = 'balangoda_gpx_store_v1';
+
+    // bus speed and waiting time
+    const BUS_SPEED_KMH = 23; // as provided
+    const STOP_WAIT_SECONDS = 30; // 30 seconds
+
+    // translations: English (en), Sinhala (si), Tamil (ta)
+    const I18N = {
+      en: {
+        route: 'Route',
+        from: 'From',
+        to: 'To',
+        findBus: 'Find Bus',
+        openMap: 'Open map',
+        theme: 'Theme',
+        language: 'Language',
+        currentTime: 'Current time',
+        lastUpdated: 'Last updated',
+        settings: 'Settings',
+        loadGPX: 'Load GPX',
+        noGPX: 'No GPX loaded.',
+        gpxSaved: 'GPX saved locally'
+      },
+      si: {
+        route: 'මාර්ගය',
+        from: 'සිට',
+        to: 'වෙත',
+        findBus: 'බස් සොයන්න',
+        openMap: 'නක්ෂා විවෘත කරන්න',
+        theme: 'තේමාව',
+        language: 'භාෂාව',
+        currentTime: 'වත්මන් වේලාව',
+        lastUpdated: 'අවසන් යාවත්කාලීන',
+        settings: 'සැකසුම්',
+        loadGPX: 'GPX උඩුගත කරන්න',
+        noGPX: 'GPX කිසිවක් උඩුගත කර නැත.',
+        gpxSaved: 'GPX ස්ථානයේ සුරක්ෂිත කරන ලදී'
+      },
+      ta: {
+        route: 'பாதை',
+        from: 'இருந்து',
+        to: 'க்கு',
+        findBus: 'பேருந்தை காண்',
+        openMap: 'வரைபடம் திற',
+        theme: 'தீம்',
+        language: 'மொழி',
+        currentTime: 'தற்போது நேரம்',
+        lastUpdated: 'சமீபத்திய செஞ்சிழை',
+        settings: 'அமைப்புகள்',
+        loadGPX: 'GPX பதிவேற்றம்',
+        noGPX: 'GPX ஏதும் இல்லை.',
+        gpxSaved: 'GPX உள்ளகமாக சேமிக்கப்பட்டது'
+      }
+    };
+
+    // Cleaned routes data (names and stops). Distances kept as provided.
+    const routesMeta = {
+      "BLG-Welioya-Hambegamuwa": {
+        label: "BLG - Welioya - Hambegamuwa (08)",
+        stops: [
+          {name: 'Balangoda', distance: 0},
+          {name: 'Kirimatitenna', distance: 3.5},
+          {name: 'Depalamulla', distance: 8.1},
+          {name: 'Bowatta', distance: 10},
+          {name: 'Rajavaka', distance: 13.5},
+          {name: 'Nawaneliya', distance: 17},
+          {name: 'Molamure', distance: 18.5},
+          {name: 'Tanjantenna', distance: 22.5},
+          {name: '16thPost', distance: 25},
+          {name: 'Kaltota', distance: 29},
+          {name: 'UdaKolaniya', distance: 31},
+          {name: 'Welioya', distance: 34},
+          {name: 'Hambegamuwa', distance: 34} // final
+        ],
+        routeNumber: "08",
+        // simplified timetable (just departure times from origin Balangoda for down)
+        timetable: {
+          down: ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"],
+          up:   ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"]
+        }
+      },
+
+      "BLG-Welipatayaya-Kaltota": {
+        label: "BLG - Welipatayaya - Kaltota (10)",
+        stops: [
+          {name: 'Balangoda', distance: 0},
+          {name: 'Kirimatitenna', distance: 3.5},
+          {name: 'Depalamulla', distance: 8.1},
+          {name: 'Bowatta', distance: 10},
+          {name: 'Rajavaka', distance: 13.5},
+          {name: 'Kassapalena', distance: 19},
+          {name: 'Diyavinna', distance: 21},
+          {name: 'Budugala', distance: 24},
+          {name: 'Welipatayāya', distance: 26},
+          {name: 'Pabbata', distance: 28},
+          {name: 'Kaltota', distance: 31}
+        ],
+        routeNumber: "10",
+        timetable: {
+          up: ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"],
+          down: ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"]
+        }
+      },
+
+      "BLG-Rajavaka-Mulgama": {
+        label: "BLG - Rajavaka - Mulgama (12)",
+        stops: [
+          {name: 'Balangoda', distance:0},
+          {name: 'Kirimatitenna', distance:3.5},
+          {name: 'Depalamulla', distance:8.1},
+          {name: 'Bowatta', distance:10},
+          {name: 'Rajavaka1j', distance:12.7},
+          {name: 'Mulgama', distance:29}
+        ],
+        routeNumber: "12",
+        timetable: {
+          down: ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"],
+          up:   ["06:00:00","07:30:00","08:30:00","09:00:00","09:30:00","10:20:00","11:40:00","12:30:00","13:30:00","15:00:00"]
+        }
+      }
+    };
+
+    /***************************************************************************
+     * App state
+     ***************************************************************************/
+    const state = {
+      lang: 'en',
+      theme: 'light',
+      gpxStore: {}, // filename -> text content (GPX XML)
+      gpxGeoJSON: {}, // filename -> geojson FeatureCollection
+      selectedRoute: null,
+      selectedFrom: null,
+      selectedTo: null,
+      // markers used on map selection
+      mapFromMarker: null,
+      mapToMarker: null,
+      liveTimeMode: true
+    };
+
+    // load settings and GPX from localStorage
+    function loadPersisted(){
+      try{
+        const s = JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}');
+        if(s.lang) state.lang = s.lang;
+        if(s.theme) {
+          state.theme = s.theme;
+          document.getElementById('app').setAttribute('data-theme', state.theme === 'dark' ? 'dark' : 'light');
+          document.getElementById('theme-toggle').checked = (state.theme === 'dark');
+          document.getElementById('theme-state').textContent = state.theme === 'dark' ? 'Dark' : 'Light';
+        }
+        const g = JSON.parse(localStorage.getItem(GPX_STORE_KEY)||'{}');
+        if(g) state.gpxStore = g;
+      }catch(e){ console.warn('load error',e); }
+    }
+
+    function persistSettings(){
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({lang: state.lang, theme: state.theme}));
+    }
+
+    function persistGPXStore(){
+      localStorage.setItem(GPX_STORE_KEY, JSON.stringify(state.gpxStore));
+    }
+
+    /***************************************************************************
+     * UI wiring and initialization
+     ***************************************************************************/
+    const routeSelect = document.getElementById('route-select');
+    const fromSelect = document.getElementById('from-select');
+    const toSelect = document.getElementById('to-select');
+    const findBtn = document.getElementById('find-btn');
+    const resultsDiv = document.getElementById('results');
+    const hamburger = document.getElementById('hamburger');
+    const menu = document.getElementById('menu');
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeState = document.getElementById('theme-state');
+    const langButtons = document.querySelectorAll('.lang-btn');
+    const openMapBtn = document.getElementById('open-map');
+    const mapModal = document.getElementById('map-modal');
+    const modalMapEl = document.getElementById('modal-map');
+    const closeMapBtn = document.getElementById('close-map');
+    const placeFromBtn = document.getElementById('place-from');
+    const placeToBtn = document.getElementById('place-to');
+    const gpxFileInput = document.getElementById('gpx-file');
+    const loadGpxBtn = document.getElementById('load-gpx');
+    const gpxListEl = document.getElementById('gpx-list');
+    const timeInput = document.getElementById('time-input');
+    const clockEl = document.getElementById('clock');
+    const clearTimeBtn = document.getElementById('clear-time');
+
+    // localization helper
+    function t(k){
+      return I18N[state.lang][k] || I18N['en'][k] || k;
+    }
+
+    function translateUI(){
+      document.getElementById('lbl-route').textContent = t('route');
+      document.getElementById('lbl-from').textContent = t('from');
+      document.getElementById('lbl-to').textContent = t('to');
+      findBtn.textContent = t('findBus');
+      document.getElementById('lbl-theme').textContent = t('theme');
+      document.getElementById('lbl-language').textContent = t('language');
+      document.getElementById('menu-title').textContent = t('settings');
+      loadGpxBtn.textContent = t('loadGPX');
+      document.getElementById('gpx-title').textContent = t('loadGPX');
+      gpxListEl.textContent = Object.keys(state.gpxStore).length ? Object.keys(state.gpxStore).join(', ') : t('noGPX');
+    }
+
+    // populate route dropdown
+    function populateRoutes(){
+      routeSelect.innerHTML = '';
+      Object.keys(routesMeta).forEach(k=>{
+        const opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = routesMeta[k].label;
+        routeSelect.appendChild(opt);
+      });
+      state.selectedRoute = routeSelect.value;
+      populateStops();
+    }
+
+    function populateStops(){
+      const route = routesMeta[routeSelect.value];
+      fromSelect.innerHTML = '';
+      toSelect.innerHTML = '';
+      route.stops.forEach(s=>{
+        const o1 = document.createElement('option');
+        o1.value = s.name;
+        o1.textContent = s.name;
+        fromSelect.appendChild(o1);
+
+        const o2 = document.createElement('option');
+        o2.value = s.name;
+        o2.textContent = s.name;
+        toSelect.appendChild(o2);
+      });
+      // set defaults
+      fromSelect.selectedIndex = 0;
+      toSelect.selectedIndex = Math.min(1, toSelect.options.length-1);
+      state.selectedFrom = fromSelect.value;
+      state.selectedTo = toSelect.value;
+    }
+
+    // event listeners
+    hamburger.addEventListener('click', ()=> menu.classList.toggle('open'));
+    routeSelect.addEventListener('change', ()=> { state.selectedRoute = routeSelect.value; populateStops(); });
+    fromSelect.addEventListener('change', ()=> state.selectedFrom = fromSelect.value);
+    toSelect.addEventListener('change', ()=> state.selectedTo = toSelect.value);
+
+    themeToggle.addEventListener('change', (e)=>{
+      state.theme = e.target.checked ? 'dark' : 'light';
+      document.getElementById('app').setAttribute('data-theme', state.theme === 'dark' ? 'dark' : 'light');
+      themeState.textContent = state.theme === 'dark' ? 'Dark' : 'Light';
+      persistSettings();
+    });
+
+    langButtons.forEach(btn=>{
+      btn.addEventListener('click', ()=> {
+        state.lang = btn.getAttribute('data-lang');
+        persistSettings();
+        translateUI();
+      });
+    });
+
+    document.getElementById('open-map').addEventListener('click', ()=> openMapModal());
+    closeMapBtn.addEventListener('click', ()=> closeMapModal());
+    loadGpxBtn.addEventListener('click', ()=> gpxFileInput.click());
+    gpxFileInput.addEventListener('change', handleGpxFiles);
+    document.getElementById('hamburger').addEventListener('click', ()=> menu.classList.toggle('open'));
+
+    // time input: keep displaying live time unless user changes it; clearTime resets to live mode
+    timeInput.addEventListener('input', () => {
+      // user changed time -> pause live mode
+      state.liveTimeMode = false;
+    });
+    clearTimeBtn.addEventListener('click', ()=>{
+      state.liveTimeMode = true;
+      // clear value so time input shows current time (we'll update display)
+      timeInput.value = '';
+    });
+
+    findBtn.addEventListener('click', ()=>{
+      findBusesForSelection();
+    });
+
+    // GPX modal map interactions: place markers mode
+    let modalMap, mainMap;
+    let modalMapGPXLayers = {}; // filename -> layer
+    let mainMapGPXLayers = {};
+
+    function openMapModal(){
+      mapModal.classList.add('open');
+      setTimeout(()=> {
+        modalMap.invalidateSize();
+      }, 250);
+    }
+    function closeMapModal(){
+      mapModal.classList.remove('open');
+    }
+
+    // Handle GPX file uploads: read text, save to state.gpxStore and parse to geojson
+    async function handleGpxFiles(e){
+      const files = Array.from(e.target.files||[]);
+      for(const f of files){
+        const text = await f.text();
+        state.gpxStore[f.name] = text;
+      }
+      persistGPXStore();
+      await loadAllGPXFromStore();
+      translateUI();
+    }
+
+    // parse GPX text into geojson using toGeoJSON
+    function parseGpxTextToGeoJSON(gpxText){
+      try{
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(gpxText, 'application/xml');
+        const gj = toGeoJSON.gpx(xml);
+        return gj;
+      }catch(err){
+        console.warn('GPX parse error',err);
+        return null;
+      }
+    }
+
+    async function loadAllGPXFromStore(){
+      // parse all stored GPX and add to map(s)
+      state.gpxGeoJSON = {};
+      for(const fname of Object.keys(state.gpxStore)){
+        const text = state.gpxStore[fname];
+        const gj = parseGpxTextToGeoJSON(text);
+        if(gj) state.gpxGeoJSON[fname] = gj;
+      }
+      renderGPXList();
+      refreshGPXOnMaps();
+    }
+
+    function renderGPXList(){
+      const names = Object.keys(state.gpxStore);
+      if(names.length === 0) {
+        gpxListEl.textContent = t('noGPX');
+      } else {
+        gpxListEl.innerHTML = '';
+        names.forEach(n=>{
+          const d = document.createElement('div');
+          d.style.display='flex';
+          d.style.justifyContent='space-between';
+          d.style.padding='4px';
+          d.textContent = n;
+          const rm = document.createElement('button');
+          rm.textContent = '✖';
+          rm.className='icon-btn';
+          rm.addEventListener('click', ()=>{
+            delete state.gpxStore[n];
+            delete state.gpxGeoJSON[n];
+            persistGPXStore();
+            loadAllGPXFromStore();
+          });
+          d.appendChild(rm);
+          gpxListEl.appendChild(d);
+        });
+      }
+    }
+
+    function refreshGPXOnMaps(){
+      // remove old layers
+      if(mainMap){
+        Object.values(mainMapGPXLayers).forEach(l => mainMap.removeLayer(l));
+        mainMapGPXLayers = {};
+      }
+      if(modalMap){
+        Object.values(modalMapGPXLayers).forEach(l => modalMap.removeLayer(l));
+        modalMapGPXLayers = {};
+      }
+
+      Object.entries(state.gpxGeoJSON).forEach(([name,gj])=>{
+        // find LineString features (tracks)
+        const lines = gj.features.filter(f=>f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString'));
+        lines.forEach((f, idx)=>{
+          const coords = f.geometry.type === 'LineString' ? f.geometry.coordinates : f.geometry.coordinates.flat();
+          const latlngs = coords.map(c=>[c[1],c[0]]);
+
+          const poly = L.polyline(latlngs, {color:'#ff5722', weight:3, opacity:0.8});
+          poly.bindPopup(`${name}${lines.length>1? ' — segment '+(idx+1):''}`);
+          mainMapGPXLayers[`${name}_${idx}`] = poly;
+          modalMapGPXLayers[`${name}_${idx}`] = poly.clone ? poly.clone() : L.polyline(latlngs,{color:'#ff5722',weight:3});
+          poly.addTo(mainMap);
+          modalMapGPXLayers[`${name}_${idx}`].addTo(modalMap);
+        });
+      });
+
+      // fit bounds if first load
+      const allLayers = Object.values(mainMapGPXLayers);
+      if(allLayers.length){
+        const group = L.featureGroup(allLayers);
+        mainMap.fitBounds(group.getBounds(), {padding:[30,30]});
+      }
+    }
+
+    // Initialize main map and modal map
+    function initMaps(){
+      mainMap = L.map('map', {zoomControl:true}).setView([6.666, 80.9], 9);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(mainMap);
+
+      modalMap = L.map('modal-map', {zoomControl:true}).setView([6.666, 80.9], 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(modalMap);
+
+      // click on modal map to place a marker snapped to nearest track
+      modalMap.on('click', async function(e){
+        // find nearest point on any GPX lines using turf
+        const nearest = findNearestPointOnAllTracks([e.latlng.lng, e.latlng.lat]);
+        if(!nearest) return alert('No GPX track available to snap to. Upload GPX first.');
+        // show preview popup
+        L.popup().setLatLng([nearest.lat, nearest.lng])
+          .setContent(`Snapped to track — distance along segment: ${nearest.alongKm.toFixed(2)} km`)
+          .openOn(modalMap);
+
+        // if placeFrom or placeTo mode selected (buttons toggle)
+      });
+
+      // enable clicking on polylines to set points:
+      modalMap.on('layeradd', ()=>{}); // placeholder
+    }
+
+    // Use Turf to find nearest point on any loaded tracks.
+    // Returns {filename, featureIndex, lat, lng, alongKm, distanceFromClickMeters}
+    function findNearestPointOnAllTracks(coord){
+      // build combined line features as GeoJSON for turf
+      let best = null;
+      Object.entries(state.gpxGeoJSON).forEach(([fname, gj])=>{
+        gj.features.filter(f=>f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString'))
+          .forEach((f, idx)=>{
+            try{
+              // convert the feature into a single LineString feature for turf if multi: flatten
+              let line = f;
+              if(f.geometry.type === 'MultiLineString'){
+                // merge into single LineString for projection by concatenating coordinates (approx)
+                const coords = f.geometry.coordinates.flat();
+                line = { type:'Feature', properties:{}, geometry:{ type:'LineString', coordinates: coords }};
+              }
+              const point = turf.point(coord);
+              const snapped = turf.nearestPointOnLine(line, point, {units:'kilometers'});
+              const dist = turf.distance(point, snapped, {units:'meters'});
+              // compute distance along line from start to snapped.point (in km)
+              const along = snapped.properties.location; // turf's nearestPointOnLine sets .properties.location as distance along in km? Depending on turf version it's in kilometers (but could be in kilometers of line length). If not available, we'll compute manually.
+              let alongKm = (!isNaN(along) && along !== undefined) ? along : computeAlongDistanceManual(line, snapped.geometry.coordinates);
+              if(!best || dist < best.dist){
+                best = {
+                  filename: fname,
+                  featureIndex: idx,
+                  lat: snapped.geometry.coordinates[1],
+                  lng: snapped.geometry.coordinates[0],
+                  alongKm,
+                  dist
+                };
+              }
+            }catch(err){ console.warn('turf error',err); }
+          });
+      });
+      return best;
+    }
+
+    // If turf.nearestPointOnLine doesn't return a 'location' property we compute along distance manually.
+    function computeAlongDistanceManual(lineFeature, snappedCoord){
+      // sum distances along vertices until nearest vertex equals snappedCoord; otherwise approximate by walking vertices.
+      const coords = lineFeature.geometry.coordinates;
+      let total = 0;
+      let found = false;
+      for(let i=0;i<coords.length-1;i++){
+        const a = coords[i];
+        const b = coords[i+1];
+        const seg = turf.lineString([a,b]);
+        const proj = turf.nearestPointOnLine(seg, turf.point(snappedCoord), {units:'kilometers'});
+        // check if the projection lies between a and b
+        const projCoord = proj.geometry.coordinates;
+        // check if projCoord nearly on segment
+        const distAB = turf.distance(turf.point(a), turf.point(b), {units:'kilometers'});
+        const distAProj = turf.distance(turf.point(a), turf.point(projCoord), {units:'kilometers'});
+        const eps = 1e-6;
+        if(Math.abs(distAB - (distAProj + turf.distance(turf.point(projCoord), turf.point(b), {units:'kilometers'}))) < 1e-3){
+          // projected onto this segment
+          total += distAProj;
+          found = true;
+          break;
+        } else {
+          total += distAB;
+        }
+      }
+      if(!found){
+        // fallback: compute distance from the start to the nearest vertex
+        let minIdx = 0;
+        let minDist = Infinity;
+        for(let i=0;i<coords.length;i++){
+          const d = turf.distance(turf.point(coords[0]), turf.point(coords[i]), {units:'kilometers'});
+          const d2 = turf.distance(turf.point(coords[i]), turf.point(snappedCoord), {units:'kilometers'});
+          if(d2 < minDist){ minDist = d2; minIdx = i; }
+        }
+        // distance to vertex:
+        total = turf.distance(turf.point(coords[0]), turf.point(coords[minIdx]), {units:'kilometers'});
+      }
+      return total;
+    }
+
+    /***************************************************************************
+     * Bus & schedule functions
+     *
+     * We compute along-track distances between two stops by projecting each stop
+     * onto the chosen GPX track and reading the along-distance (in km) for each.
+     ***************************************************************************/
+
+    // Utility: get stop's approximate position on track by searching for stop name in route stops,
+    // and using routeMeta distances to find a point on the GPX track that has similar along-distance value.
+    // If a GPX is available we snap to closest along-distance. If no GPX, we fallback to direct-estimated distance from metadata.
+    function estimateStopAlongDistanceOnTrack(routeKey, stopName){
+      // find stop's distance (km from origin) from meta
+      const meta = routesMeta[routeKey];
+      const stop = meta.stops.find(s=>s.name === stopName);
+      if(!stop) return null;
+      // if any GPX tracks exist, pick the first GPX and map distances along track to nearest
+      const gnames = Object.keys(state.gpxGeoJSON);
+      if(gnames.length === 0){
+        return {alongKm: stop.distance, source: 'meta'};
+      }
+      // choose first GPX that is likely the same route (filename contains route code?)
+      // fallback: use first GPX
+      const fname = gnames[0];
+      // build a single merged LineString with coordinates
+      const gj = state.gpxGeoJSON[fname];
+      const lines = gj.features.filter(f=>f.geometry && (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString'));
+      if(lines.length === 0) return {alongKm: stop.distance, source:'meta'};
+      const merged = {
+        type:'Feature',
+        geometry:{
+          type:'LineString',
+          coordinates: []
+        }
+      };
+      lines.forEach(f=>{
+        if(f.geometry.type === 'LineString') merged.geometry.coordinates.push(...f.geometry.coordinates);
+        else merged.geometry.coordinates.push(...f.geometry.coordinates.flat());
+      });
+
+      // We don't have precise lat/lng for the stop; we approximate by mapping stop.distance to the closest point along the track using the proportion of total track length.
+      const trackLengthKm = turf.length(merged, {units:'kilometers'});
+      // compute proportion of stop.distance relative to route meta's final distance
+      const routeFinal = meta.stops[meta.stops.length-1].distance || trackLengthKm;
+      const targetAlongKm = Math.min(trackLengthKm, (stop.distance / routeFinal) * trackLengthKm);
+
+      // now get point at that distance
+      const ptOnLine = turf.along(merged, targetAlongKm, {units:'kilometers'});
+      const snapped = turf.nearestPointOnLine(merged, ptOnLine, {units:'kilometers'});
+      // snapped.properties.location should contain along-distance in km along the track (Turf sets 'location' as distance in kilometers)
+      const alongKm = snapped.properties && snapped.properties.location ? snapped.properties.location : targetAlongKm;
+      return {alongKm, lat: snapped.geometry.coordinates[1], lng: snapped.geometry.coordinates[0], source:'gpx', gpxName: fname};
+    }
+
+    // Given two stops compute along-track distance (km) along the track from 'from' to 'to' (always positive).
+    function distanceAlongTrackBetweenStops(routeKey, fromStopName, toStopName){
+      // prefer GPX-based distances where possible
+      const a = estimateStopAlongDistanceOnTrack(routeKey, fromStopName);
+      const b = estimateStopAlongDistanceOnTrack(routeKey, toStopName);
+      if(!a || !b) return null;
+      const distKm = Math.abs(b.alongKm - a.alongKm);
+      const direction = (b.alongKm >= a.alongKm) ? 'down' : 'up';
+      return {distKm, direction, a, b};
+    }
+
+    // parse a timetable time (HH:MM:SS) into a Date object for "today"
+    function timeStringToTodayDate(timestr){
+      const now = new Date();
+      const [hh,mm,ss] = timestr.split(':').map(n=>parseInt(n,10)||0);
+      const d = new Date(now.getFullYear(),now.getMonth(),now.getDate(),hh,mm,ss);
+      return d;
+    }
+
+    // compute ETA to stop: given bus departure from route origin at time departDate (Date),
+    // and we need time to reach 'fromStop' which is at along-distance from origin: first compute bus travel time along the track: t = distance / speed + waiting time per stop in seconds * number of stops between origin and target
+    function estimateArrivalTime(departDate, routeKey, originStopName, targetStopName){
+      // compute along distances of originStopName and targetStopName relative to route origin using estimateStopAlongDistanceOnTrack
+      const meta = routesMeta[routeKey];
+      const originEst = estimateStopAlongDistanceOnTrack(routeKey, originStopName);
+      const targetEst = estimateStopAlongDistanceOnTrack(routeKey, targetStopName);
+      if(!originEst || !targetEst) return null;
+      // compute distance along track from origin to target
+      // NOTE: if originEst.gpxName !== targetEst.gpxName the estimates may be inconsistent; we still compute relative distances.
+      const alongFrom = originEst.alongKm;
+      const alongTo = targetEst.alongKm;
+      // compute distance the bus will travel from origin's along to target's along
+      const distanceToTravelKm = Math.abs(alongTo - alongFrom);
+      const travelHours = distanceToTravelKm / BUS_SPEED_KMH;
+      const travelMillis = travelHours * 3600 * 1000;
+
+      // Estimate number of intermediate stops: approximate by counting stops between indices in meta stops list
+      const idxOrigin = meta.stops.findIndex(s=>s.name === originStopName);
+      const idxTarget = meta.stops.findIndex(s=>s.name === targetStopName);
+      const stopsBetween = Math.abs((idxTarget === -1 || idxOrigin === -1) ? 0 : (idxTarget - idxOrigin));
+      const waitMillis = Math.max(0, stopsBetween) * STOP_WAIT_SECONDS * 1000;
+
+      const eta = new Date(departDate.getTime() + travelMillis + waitMillis);
+      return {eta, distanceKm: distanceToTravelKm, travelHours, stopsBetween};
+    }
+
+    // Given user's selected time (or current) compute upcoming buses (departures) arriving to 'from' and 'to' with ETAs
+    function findBusesForSelection(){
+      const routeKey = state.selectedRoute || routeSelect.value;
+      const from = state.selectedFrom || fromSelect.value;
+      const to = state.selectedTo || toSelect.value;
+
+      // time: if user set timeInput (not empty) use that time today, else use current Date (live)
+      let referenceTime;
+      if(timeInput.value && !state.liveTimeMode){
+        // timeInput.value may be HH:MM or HH:MM:SS
+        const parts = timeInput.value.split(':').map(n=>parseInt(n,10)||0);
+        const now = new Date();
+        referenceTime = new Date(now.getFullYear(),now.getMonth(),now.getDate(), parts[0]||0, parts[1]||0, parts[2]||0);
+      } else {
+        referenceTime = new Date();
+      }
+
+      // compute distance along track and direction
+      const alongInfo = distanceAlongTrackBetweenStops(routeKey, from, to);
+      if(!alongInfo){
+        resultsDiv.innerHTML = `<div>No track or metadata available for route/stops.</div>`;
+        return;
+      }
+
+      const direction = alongInfo.direction; // 'down' or 'up'
+      // choose timetable direction based on direction
+      const tt = routesMeta[routeKey].timetable[direction] || routesMeta[routeKey].timetable.down || [];
+      // convert timetable times to Date objects for today
+      const departures = tt.map(t=>timeStringToTodayDate(t)).filter(d=>!isNaN(d.getTime()));
+      // find upcoming buses whose departureTime >= referenceTime - a small tolerance
+      const upcoming = departures.filter(d => d.getTime() + 1 >= referenceTime.getTime()).slice(0,6);
+
+      if(upcoming.length === 0){
+        resultsDiv.innerHTML = `<div>No upcoming scheduled departures on this route/direction for the remainder of today.</div>`;
+        return;
+      }
+
+      // For each upcoming bus compute ETA to 'from' and 'to'
+      const rows = upcoming.map(dep => {
+        const arrivalToFrom = estimateArrivalTime(dep, routeKey, routesMeta[routeKey].stops[0].name, from);
+        const arrivalToTo = estimateArrivalTime(dep, routeKey, routesMeta[routeKey].stops[0].name, to);
+        const depStr = dep.toLocaleTimeString();
+        const fromStr = arrivalToFrom ? arrivalToFrom.eta.toLocaleTimeString() : '—';
+        const toStr = arrivalToTo ? arrivalToTo.eta.toLocaleTimeString() : '—';
+        return {depStr, fromStr, toStr, depDate:dep, distance: alongInfo.distKm};
+      });
+
+      // render result
+      let html = `<div><strong>Route:</strong> ${routesMeta[routeKey].label} — direction: ${direction}</div>`;
+      html += `<div style="margin-top:8px"><strong>From:</strong> ${from} — <strong>To:</strong> ${to} — Distance along route: ${alongInfo.distKm.toFixed(2)} km</div>`;
+      html += `<table style="width:100%;margin-top:8px;border-collapse:collapse">`;
+      html += `<tr style="text-align:left;color:var(--muted)"><th>Departure</th><th>Arrival (${from})</th><th>Arrival (${to})</th></tr>`;
+      rows.forEach(r=>{
+        html += `<tr><td style="padding:6px 0">${r.depStr}</td><td style="padding:6px 0">${r.fromStr}</td><td style="padding:6px 0">${r.toStr}</td></tr>`;
+      });
+      html += `</table>`;
+      resultsDiv.innerHTML = html;
+    }
+
+    /***************************************************************************
+     * Clock / live time update logic
+     * - if user hasn't touched time input, show current time in the input (continuously),
+     *   otherwise preserve the user's value until they press the "clear"/reset button.
+     ***************************************************************************/
+    function updateClockDisplay(){
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2,'0');
+      const mm = String(now.getMinutes()).padStart(2,'0');
+      const ss = String(now.getSeconds()).padStart(2,'0');
+      clockEl.textContent = `${hh}:${mm}:${ss}`;
+
+      if(state.liveTimeMode){
+        // show current time in the time input
+        timeInput.value = `${hh}:${mm}:${ss}`;
+      }
+    }
+
+    // Utility to pre-load some small placeholder GPX into store? (disabled)
+    function bootstrap(){
+      loadPersisted();
+      translateUI();
+      populateRoutes();
+      initMaps();
+
+      // load any persisted GPX
+      loadAllGPXFromStore().then(()=>refreshGPXOnMaps());
+
+      // set interval for clock
+      setInterval(updateClockDisplay, 1000);
+      updateClockDisplay();
+    }
+
+    // Initialize app
+    bootstrap();
+
+    // After maps are ready, refresh GPX layers
+    window.addEventListener('load', ()=>{
+      setTimeout(()=> refreshGPXOnMaps(), 500);
+    });
+
+    /***************************************************************************
+     * Notes for integrators:
+     * - To "embed .gpx tracks permanently in the map", upload GPX files using the "Load GPX" button.
+     *   GPX files are stored in localStorage and reloaded automatically in this WebView.
+     * - Distance along GPX track is calculated using Turf's projection (nearest-point-on-line)
+     *   and turf.along to get along-track distances (in kilometers).
+     * - Direction is inferred from along-track indices: if 'to' is at higher along-distance than 'from'
+     *   we declare direction 'down', otherwise 'up'.
+     * - The "Time" input shows live time until the user edits it. Click the circular button to restore live mode.
+     *
+     * Next improvements if this were turned into a full Android WebView app:
+     * - Persist GPX files into the app private storage instead of localStorage.
+     * - Provide precise stop coordinates (lat/lng) for accurate snapping instead of approximating by distance share.
+     * - Allow selecting which GPX corresponds to which route (automated matching by name or manual assignment).
+     * - Add offline tile provider, optimize memory and file sizes for mobile.
+     ***************************************************************************/
+  </script>
+</body>
+</html>
