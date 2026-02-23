@@ -1,0 +1,29 @@
+﻿{
+  "name": "Bus Time",
+  "short_name": "BusTime",
+  "description": "Offline Bus Schedule Prototype for Balangoda",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#102137",
+  "theme_color": "#102137",
+  "icons": [
+    {
+      "src": "icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/any-icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
